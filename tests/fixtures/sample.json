@@ -1,0 +1,9 @@
+{
+  "posts": [
+    {
+      "id": 999,
+      "title": "Hackathon Winning Project",
+      "body": "This is a test description."
+    }
+  ]
+}

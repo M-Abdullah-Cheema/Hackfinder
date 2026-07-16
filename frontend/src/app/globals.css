@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/* ── Mixed inspiration design system ───────────────────────────
+   Neo-brutalism + keycap 3D + grid paper + retro window chrome
+   ─────────────────────────────────────────────────────────── */
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: var(--font-body), Arial, sans-serif;
+    background-color: #9ff1d1;
+    color: #000;
+    background-image:
+      linear-gradient(rgba(0, 0, 0, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+}
+
+@layer utilities {
+  .neo-shadow {
+    box-shadow: 6px 6px 0 0 #000;
+  }
+
+  .neo-shadow-sm {
+    box-shadow: 4px 4px 0 0 #000;
+  }
+
+  .neo-shadow-lg {
+    box-shadow: 10px 10px 0 0 #000;
+  }
+
+  .neo-shadow-hover:hover {
+    box-shadow: 2px 2px 0 0 #000;
+    transform: translate(4px, 4px);
+  }
+
+  .neo-border {
+    border: 4px solid #000;
+  }
+
+  .neo-border-2 {
+    border: 2px solid #000;
+  }
+
+  .keycap {
+    border: 4px solid #000;
+    border-radius: 10px;
+    box-shadow: 0 6px 0 #000, 6px 6px 0 #000;
+    transform: translateY(-2px);
+    transition: transform 0.1s ease, box-shadow 0.1s ease;
+  }
+
+  .keycap:hover {
+    transform: translate(2px, 2px);
+    box-shadow: 0 4px 0 #000, 4px 4px 0 #000;
+  }
+
+  .keycap:active {
+    transform: translate(4px, 6px);
+    box-shadow: 0 2px 0 #000, 2px 2px 0 #000;
+  }
+
+  .retro-window {
+    border: 4px solid #000;
+    box-shadow: 8px 8px 0 0 #000;
+    background: #fdf8e1;
+  }
+
+  .retro-titlebar {
+    border-bottom: 4px solid #000;
+    background: #1a1a4e;
+    color: #fff;
+  }
+
+  .grid-panel {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+
+  .halftone {
+    background-image: radial-gradient(#000 1px, transparent 1px);
+    background-size: 4px 4px;
+    opacity: 0.08;
+  }
+
+  .tilt-tag {
+    transform: rotate(-2deg);
+  }
+
+  .font-display {
+    font-family: var(--font-display), Impact, sans-serif;
+  }
+
+  .font-mono-label {
+    font-family: var(--font-mono), monospace;
+  }
+}
