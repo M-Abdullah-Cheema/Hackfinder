@@ -1,7 +1,11 @@
 """
-Quick seed script — inserts sample FinalOpportunity rows directly into Supabase
+Quick seed script — inserts DEMO FinalOpportunity rows directly into Supabase
 so the frontend has data to display immediately, without needing the full
 Playwright → OCR → AI → Celery pipeline to run first.
+
+This is NOT live scraped data. For real-time updates, run:
+    python scrapers/auth_states/login.py
+    python scripts/trigger_pipeline.py
 
 Run with:
     python scripts/seed_opportunities.py
@@ -131,6 +135,14 @@ async def seed():
                 category=item["category"],
                 registration_url=item.get("registration_url"),
                 platform_post_id=item["platform_post_id"],
+                city=item.get("city", "Islamabad"),
+                country=item.get("country", "Pakistan"),
+                latitude=item.get("latitude", 33.6844),
+                longitude=item.get("longitude", 73.0479),
+                domain=item.get("domain", "Tech"),
+                subcategory=item.get("subcategory", "Community"),
+                format=item.get("format", "In-Person"),
+                local_timezone=item.get("local_timezone", "Asia/Karachi"),
                 embedding=None,  # No vector needed for display
             )
             session.add(opp)

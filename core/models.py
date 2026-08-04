@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Index, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import String, Text, DateTime, Integer, Boolean, JSON
+from sqlalchemy.types import String, Text, DateTime, Integer, Boolean, JSON, Float
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy import Enum as SQLEnum
 from pgvector.sqlalchemy import Vector  # Import Vector for semantic search
@@ -70,6 +70,19 @@ class ScrapedOpportunity(Base):
     ocr_processed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    # Optional geo/time hints captured at ingest (feeds / early parse)
+    city: Mapped[str | None] = mapped_column(String, nullable=True)
+    country: Mapped[str | None] = mapped_column(String, nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_datetime_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_datetime_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    local_timezone: Mapped[str | None] = mapped_column(String, nullable=True)
+    domain: Mapped[str | None] = mapped_column(String, nullable=True)
+    subcategory: Mapped[str | None] = mapped_column(String, nullable=True)
+    format: Mapped[str | None] = mapped_column(String, nullable=True)
+    registration_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
 # ==========================================
 # PHASE 8 - FINAL PRODUCTION TABLE
 # ==========================================
@@ -84,6 +97,23 @@ class FinalOpportunity(Base):
     registration_url: Mapped[str] = mapped_column(String, nullable=True, index=True)
     platform_post_id: Mapped[str] = mapped_column(String, unique=True, index=True)
 
+    # Global expansion fields (HackFinder Global)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    city: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    country: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    start_datetime_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    end_datetime_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    local_timezone: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Hierarchical taxonomy: Domain -> Subcategory -> Format
+    domain: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    subcategory: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    format: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # 1536-dimensional coordinates for text-embedding-3-small
     embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=True)
 
@@ -96,6 +126,7 @@ class FinalOpportunity(Base):
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"embedding": "vector_cosine_ops"}
         ),
+        Index("ix_final_geo_lookup", "country", "city", "start_datetime_utc"),
     )
 
 # ==========================================

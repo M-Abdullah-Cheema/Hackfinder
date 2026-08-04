@@ -1,8 +1,16 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useState, useCallback } from "react";
 import { Opportunity } from "@/types/opportunity";
 import { fetchOpportunities, fetchCategories, fetchOrganizations } from "@/lib/api";
+
+const EventsMap = dynamic(() => import("@/components/EventsMap"), {
+  ssr: false,
+  loading: () => (
+    <div className="retro-window h-[360px] animate-pulse bg-[#dce8f5]" />
+  ),
+});
 
 const CATEGORY_COLORS: Record<string, { bg: string; side: string; label: string; key: string }> = {
   Hackathon: { bg: "bg-[#FFE566]", side: "bg-[#E6C200]", label: "Hackathon", key: "H" },
@@ -54,8 +62,30 @@ function Keycap({
   );
 }
 
+function formatEventWhen(opp: Opportunity): string | null {
+  if (!opp.start_datetime_utc) return null;
+  try {
+    const dt = new Date(opp.start_datetime_utc);
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(dt);
+  } catch {
+    return null;
+  }
+}
+
+function isSeedOpportunity(opp: Opportunity): boolean {
+  return (opp.platform_post_id || "").startsWith("ig_seed_");
+}
+
 function OpportunityCard({ opp }: { opp: Opportunity }) {
   const style = getCategoryStyle(opp.category);
+  const isDemo = isSeedOpportunity(opp);
+  const place =
+    [opp.city, opp.country].filter(Boolean).join(", ") ||
+    (isDemo ? "Islamabad, Pakistan" : "");
+  const when = formatEventWhen(opp);
 
   return (
     <article className="retro-window overflow-hidden flex flex-col group">
@@ -64,9 +94,20 @@ function OpportunityCard({ opp }: { opp: Opportunity }) {
           <Keycap char={style.key} bg={style.bg} side={style.side} size="sm" />
           <span className="font-display text-sm uppercase tracking-wider">{style.label}</span>
         </div>
-        <span className="font-mono-label text-[10px] bg-black text-white px-2 py-0.5">
-          #{opp.id}
-        </span>
+        <div className="flex items-center gap-2">
+          {isDemo ? (
+            <span className="font-mono-label text-[10px] bg-[#FF6B5B] text-black px-2 py-0.5 border-2 border-black">
+              DEMO
+            </span>
+          ) : (
+            <span className="font-mono-label text-[10px] bg-[#B8F55A] text-black px-2 py-0.5 border-2 border-black">
+              LIVE
+            </span>
+          )}
+          <span className="font-mono-label text-[10px] bg-black text-white px-2 py-0.5">
+            #{opp.id}
+          </span>
+        </div>
       </div>
 
       <div className="p-5 flex flex-col gap-4 flex-1 bg-[#fdf8e1] relative">
@@ -79,6 +120,19 @@ function OpportunityCard({ opp }: { opp: Opportunity }) {
         <p className="tilt-tag neo-border-2 bg-[#FFE566] font-bold text-xs px-3 py-1 w-fit relative z-10">
           {opp.organization_name}
         </p>
+
+        {(place || when || opp.format || opp.subcategory) && (
+          <div className="relative z-10 flex flex-col gap-1 font-mono-label text-[11px] text-gray-700">
+            {place ? <span>{place}</span> : null}
+            {when ? <span>{when}</span> : null}
+            {opp.domain || opp.subcategory ? (
+              <span>
+                {[opp.domain, opp.subcategory].filter(Boolean).join(" / ")}
+              </span>
+            ) : null}
+            {opp.format ? <span>{opp.format.toUpperCase()}</span> : null}
+          </div>
+        )}
 
         <div className="flex-1" />
 
@@ -110,6 +164,12 @@ function FilterWindow({
   onOrgChange,
   onReset,
   count,
+  nearbyEnabled,
+  radiusKm,
+  geoError,
+  onNearbyToggle,
+  onRadiusChange,
+  onLocate,
 }: {
   categories: string[];
   organizations: string[];
@@ -119,6 +179,12 @@ function FilterWindow({
   onOrgChange: (v: string) => void;
   onReset: () => void;
   count: number;
+  nearbyEnabled: boolean;
+  radiusKm: number;
+  geoError: string | null;
+  onNearbyToggle: (v: boolean) => void;
+  onRadiusChange: (v: number) => void;
+  onLocate: () => void;
 }) {
   return (
     <div className="retro-window overflow-hidden">
@@ -168,6 +234,40 @@ function FilterWindow({
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="neo-border-2 bg-white p-3 flex flex-col gap-3">
+          <label className="font-display text-xs uppercase tracking-widest flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={nearbyEnabled}
+              onChange={(e) => onNearbyToggle(e.target.checked)}
+            />
+            Near me
+          </label>
+          <button
+            type="button"
+            onClick={onLocate}
+            className="keycap bg-[#5BB8FF] font-display uppercase text-xs py-2"
+          >
+            Use my location
+          </button>
+          <label className="font-mono-label text-[10px]">
+            RADIUS KM: {radiusKm}
+            <input
+              type="range"
+              min={5}
+              max={200}
+              step={5}
+              value={radiusKm}
+              onChange={(e) => onRadiusChange(Number(e.target.value))}
+              className="w-full mt-1"
+              disabled={!nearbyEnabled}
+            />
+          </label>
+          {geoError ? (
+            <p className="font-mono-label text-[10px] text-[#D94435]">{geoError}</p>
+          ) : null}
         </div>
 
         <button
@@ -278,10 +378,37 @@ export default function HomePage() {
   const [selectedOrg, setSelectedOrg] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(
+    null
+  );
+  const [nearbyEnabled, setNearbyEnabled] = useState(false);
+  const [radiusKm, setRadiusKm] = useState(50);
+  const [geoError, setGeoError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCategories().then(setCategories).catch(() => {});
     fetchOrganizations().then(setOrganizations).catch(() => {});
+  }, []);
+
+  const locate = useCallback(() => {
+    setGeoError(null);
+    if (!navigator.geolocation) {
+      setGeoError("Geolocation not supported in this browser.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLocation({
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        });
+        setNearbyEnabled(true);
+      },
+      (err) => {
+        setGeoError(err.message || "Could not read location.");
+      },
+      { enableHighAccuracy: false, timeout: 12000 }
+    );
   }, []);
 
   const loadOpportunities = useCallback(async () => {
@@ -291,6 +418,9 @@ export default function HomePage() {
       const data = await fetchOpportunities({
         category: selectedCategory || undefined,
         organization_name: selectedOrg || undefined,
+        lat: nearbyEnabled && userLocation ? userLocation.lat : undefined,
+        lng: nearbyEnabled && userLocation ? userLocation.lng : undefined,
+        radius_km: nearbyEnabled && userLocation ? radiusKm : undefined,
       });
       setOpportunities(data);
     } catch (e: unknown) {
@@ -298,7 +428,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedCategory, selectedOrg]);
+  }, [selectedCategory, selectedOrg, nearbyEnabled, userLocation, radiusKm]);
 
   useEffect(() => {
     loadOpportunities();
@@ -307,9 +437,11 @@ export default function HomePage() {
   const handleReset = () => {
     setSelectedCategory("");
     setSelectedOrg("");
+    setNearbyEnabled(false);
+    setGeoError(null);
   };
 
-  const hasFilters = Boolean(selectedCategory || selectedOrg);
+  const hasFilters = Boolean(selectedCategory || selectedOrg || nearbyEnabled);
 
   const stats = {
     total: opportunities.length,
@@ -323,7 +455,9 @@ export default function HomePage() {
       <div className="bg-white border-b-4 border-black px-4 py-2 flex items-center justify-between font-mono-label text-xs">
         <span>HACKFINDER v1.0</span>
         <span className="bg-[#1a1a4e] text-white px-3 py-1">
-          &lt;live&gt; Islamabad Tech Feed &lt;/live&gt;
+          {opportunities.some((o) => !isSeedOpportunity(o))
+            ? "<live> scraped feed </live>"
+            : "<demo> seed data — pipeline not promoted yet </demo>"}
         </span>
       </div>
 
@@ -394,6 +528,15 @@ export default function HomePage() {
             onOrgChange={setSelectedOrg}
             onReset={handleReset}
             count={opportunities.length}
+            nearbyEnabled={nearbyEnabled}
+            radiusKm={radiusKm}
+            geoError={geoError}
+            onNearbyToggle={(v) => {
+              setNearbyEnabled(v);
+              if (v && !userLocation) locate();
+            }}
+            onRadiusChange={setRadiusKm}
+            onLocate={locate}
           />
 
           <div className="retro-window mt-6 overflow-hidden">
@@ -447,6 +590,14 @@ export default function HomePage() {
                   </button>
                 </span>
               )}
+              {nearbyEnabled && (
+                <span className="tilt-tag neo-border neo-shadow-sm bg-[#FFE566] px-4 py-2 text-sm font-display uppercase flex items-center gap-2">
+                  Near me · {radiusKm}km
+                  <button onClick={() => setNearbyEnabled(false)} className="font-black">
+                    ✕
+                  </button>
+                </span>
+              )}
             </div>
           )}
 
@@ -457,10 +608,17 @@ export default function HomePage() {
           ) : opportunities.length === 0 ? (
             <EmptyState hasFilters={hasFilters} onReset={handleReset} />
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
-              {opportunities.map((opp) => (
-                <OpportunityCard key={opp.id} opp={opp} />
-              ))}
+            <div className="flex flex-col gap-6">
+              <EventsMap
+                opportunities={opportunities}
+                center={nearbyEnabled ? userLocation : null}
+                radiusKm={radiusKm}
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+                {opportunities.map((opp) => (
+                  <OpportunityCard key={opp.id} opp={opp} />
+                ))}
+              </div>
             </div>
           )}
         </main>

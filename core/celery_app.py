@@ -2,6 +2,8 @@ import os
 from celery import Celery
 from dotenv import load_dotenv
 
+from core.pipeline_config import SCRAPE_INTERVAL_SECONDS
+
 load_dotenv()
 
 # Initialize Celery, point it to Redis, and INCLUDE the tasks folder
@@ -22,15 +24,26 @@ celery_app.conf.update(
     
     # Define explicitly isolated queues for different resource intensities
     task_routes={
+        "tasks.workflows.trigger_all_sources": {"queue": "scrapers"},
         "tasks.workflows.scrape_task": {"queue": "scrapers"},
         "tasks.workflows.ocr_task": {"queue": "ocr_tasks"},
+        "tasks.workflows.prefilter_task": {"queue": "ai_extraction"},
         "tasks.workflows.ai_task": {"queue": "ai_extraction"},
         "tasks.workflows.dedup_task": {"queue": "deliveries"},
+        "tasks.workflows.feed_ingest_task": {"queue": "scrapers"},
     },
     
     # DISTRIBUTED RATE LIMITING
     # Protects your burner accounts by strictly limiting how fast scraping tasks execute
     task_annotations={
         "tasks.workflows.scrape_task": {"rate_limit": "5/m"}  # Max 5 scrapes per minute
-    }
+    },
+
+    # Celery Beat — automatic background scraping every SCRAPE_INTERVAL_SECONDS (default 6h)
+    beat_schedule={
+        "scrape-instagram-periodic": {
+            "task": "tasks.workflows.trigger_all_sources",
+            "schedule": float(SCRAPE_INTERVAL_SECONDS),
+        },
+    },
 )

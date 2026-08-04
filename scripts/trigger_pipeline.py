@@ -6,39 +6,48 @@ Usage:
 
 Prerequisites:
     1. Redis running: docker run -p 6379:6379 redis
-    2. Celery workers started:
-         celery -A core.celery_app worker -Q scrapers       -c 2 --loglevel=info
-         celery -A core.celery_app worker -Q ocr_tasks      -c 4 --loglevel=info
-         celery -A core.celery_app worker -Q ai_extraction  -c 4 --loglevel=info
-         celery -A core.celery_app worker -Q deliveries     -c 4 --loglevel=info
-    3. (Optional) Provide Instagram session: see scrapers/auth_states/README.md
+    2. Celery worker listening on all queues:
+         python -m celery -A core.celery_app worker -Q scrapers,ocr_tasks,ai_extraction,deliveries --loglevel=info --concurrency=2
+    3. Instagram session saved: python scrapers/auth_states/login.py
 """
 
-from celery import chain
-from core.celery_app import celery_app  # noqa: F401 – ensures tasks are registered
-from tasks.workflows import scrape_task, ocr_task, ai_task, dedup_task
+import sys
+import os
 
-INSTAGRAM_TARGETS = [
-    "https://www.instagram.com/gdgcloud.islamabad/?hl=en",
-    "https://www.instagram.com/googledevs_isb/?hl=en",
-    "https://www.instagram.com/insideimagineart/?hl=en",
-    "https://www.instagram.com/change.mechanics/?hl=en",
-    "https://www.instagram.com/awssbgnust/?hl=en",
-]
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.celery_app import celery_app  # noqa: F401 — registers tasks
+from core.pipeline_config import AUTH_STATE_PATH, INSTAGRAM_TARGETS, instagram_auth_ready
+from tasks.workflows import trigger_all_sources
+
+
+def main() -> int:
+    print("[*] HackFinder live pipeline trigger\n")
+
+    if not instagram_auth_ready():
+        print(f"[FAIL] Instagram auth not found at: {AUTH_STATE_PATH}")
+        print("       Run this first:  python scrapers/auth_states/login.py")
+        return 1
+
+    print(f"[*] Auth OK — dispatching {len(INSTAGRAM_TARGETS)} target(s)...\n")
+
+    # Run synchronously in-process for immediate feedback (still async via Celery)
+    result = trigger_all_sources.delay()
+    payload = result.get(timeout=30)
+
+    if payload.get("status") == "auth_missing":
+        print("[FAIL] Worker reported missing Instagram auth.")
+        return 1
+
+    print(f"[OK] Dispatched {payload.get('dispatched', 0)} pipeline chain(s):\n")
+    for chain in payload.get("chains", []):
+        print(f"  - {chain['url']}")
+        print(f"    chain_id: {chain['chain_id']}\n")
+
+    print("[*] Monitor worker logs or run:")
+    print("    python scripts/check_live_pipeline.py")
+    return 0
+
 
 if __name__ == "__main__":
-    print("🚀 Dispatching scrape pipelines for all Instagram targets...\n")
-
-    for url in INSTAGRAM_TARGETS:
-        pipeline = chain(
-            scrape_task.s(url),
-            ocr_task.s(),
-            ai_task.s(),
-            dedup_task.s(),
-        )
-        result = pipeline.delay()
-        print(f"  ✅ Pipeline dispatched for: {url}")
-        print(f"     Task chain ID: {result.id}\n")
-
-    print("✔ All pipelines dispatched. Monitor progress with:")
-    print("  celery -A core.celery_app flower  (or inspect your worker logs)")
+    raise SystemExit(main())

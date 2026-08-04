@@ -7,6 +7,11 @@ class PlatformType(str, enum.Enum):
     LINKEDIN = "linkedin"
     INSTAGRAM = "instagram"
     STATIC_WEB = "static_web"
+    RSS = "rss"
+    ICAL = "ical"
+    EVENTBRITE = "eventbrite"
+    MEETUP = "meetup"
+    LUMA = "luma"
 
 class SourceConfigSchema(BaseModel):
     """Defines structural validation rules for both legacy web scraping and social feeds."""
