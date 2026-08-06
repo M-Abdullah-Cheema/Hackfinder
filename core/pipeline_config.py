@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import os
 
-# Default Instagram targets (Islamabad tech community)
+# Default Instagram targets (Islamabad tech + global hackathon orgs)
 INSTAGRAM_TARGETS: list[str] = [
     "https://www.instagram.com/gdgcloud.islamabad/?hl=en",
     "https://www.instagram.com/googledevs_isb/?hl=en",
     "https://www.instagram.com/insideimagineart/?hl=en",
     "https://www.instagram.com/change.mechanics/?hl=en",
     "https://www.instagram.com/awssbgnust/?hl=en",
+    "https://www.instagram.com/lablab.ai/?hl=en",
 ]
 
 # How often Celery Beat re-triggers the full pipeline (default: 6 hours)

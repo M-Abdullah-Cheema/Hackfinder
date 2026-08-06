@@ -75,6 +75,25 @@ function formatEventWhen(opp: Opportunity): string | null {
   }
 }
 
+function isUpcomingOpportunity(opp: Opportunity): boolean {
+  const now = Date.now();
+  const startOfToday = new Date();
+  startOfToday.setUTCHours(0, 0, 0, 0);
+  const start = opp.start_datetime_utc
+    ? new Date(opp.start_datetime_utc).getTime()
+    : null;
+  const end = opp.end_datetime_utc
+    ? new Date(opp.end_datetime_utc).getTime()
+    : null;
+  if (end != null && !Number.isNaN(end) && end >= now) return true;
+  if (start != null && !Number.isNaN(start) && start >= startOfToday.getTime())
+    return true;
+  if (start != null && end == null && start < startOfToday.getTime()) return false;
+  if (end != null && end < now) return false;
+  if (start == null && end == null) return true;
+  return false;
+}
+
 function isSeedOpportunity(opp: Opportunity): boolean {
   return (opp.platform_post_id || "").startsWith("ig_seed_");
 }
@@ -143,7 +162,9 @@ function OpportunityCard({ opp }: { opp: Opportunity }) {
             rel="noopener noreferrer"
             className="keycap bg-[#1a1a4e] text-white font-display uppercase text-sm text-center py-3 px-4 relative z-10"
           >
-            Register ↗
+            {opp.registration_url.includes("instagram.com/")
+              ? "View post ↗"
+              : "Register ↗"}
           </a>
         ) : (
           <span className="neo-border-2 text-center py-3 text-sm font-bold text-gray-500 bg-white/60 font-mono-label relative z-10">
@@ -170,6 +191,8 @@ function FilterWindow({
   onNearbyToggle,
   onRadiusChange,
   onLocate,
+  hideDemo,
+  onHideDemoToggle,
 }: {
   categories: string[];
   organizations: string[];
@@ -185,6 +208,8 @@ function FilterWindow({
   onNearbyToggle: (v: boolean) => void;
   onRadiusChange: (v: number) => void;
   onLocate: () => void;
+  hideDemo: boolean;
+  onHideDemoToggle: (v: boolean) => void;
 }) {
   return (
     <div className="retro-window overflow-hidden">
@@ -237,6 +262,14 @@ function FilterWindow({
         </div>
 
         <div className="neo-border-2 bg-white p-3 flex flex-col gap-3">
+          <label className="font-display text-xs uppercase tracking-widest flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={hideDemo}
+              onChange={(e) => onHideDemoToggle(e.target.checked)}
+            />
+            Live only (hide DEMO seeds)
+          </label>
           <label className="font-display text-xs uppercase tracking-widest flex items-center gap-2">
             <input
               type="checkbox"
@@ -384,6 +417,7 @@ export default function HomePage() {
   const [nearbyEnabled, setNearbyEnabled] = useState(false);
   const [radiusKm, setRadiusKm] = useState(50);
   const [geoError, setGeoError] = useState<string | null>(null);
+  const [hideDemo, setHideDemo] = useState(true);
 
   useEffect(() => {
     fetchCategories().then(setCategories).catch(() => {});
@@ -422,7 +456,13 @@ export default function HomePage() {
         lng: nearbyEnabled && userLocation ? userLocation.lng : undefined,
         radius_km: nearbyEnabled && userLocation ? radiusKm : undefined,
       });
-      setOpportunities(data);
+      // LIVE scraped posts first; seed/demo last
+      const sorted = [...data].sort((a, b) => {
+        const aLive = isSeedOpportunity(a) ? 1 : 0;
+        const bLive = isSeedOpportunity(b) ? 1 : 0;
+        return aLive - bLive || b.id - a.id;
+      });
+      setOpportunities(sorted);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
@@ -439,14 +479,23 @@ export default function HomePage() {
     setSelectedOrg("");
     setNearbyEnabled(false);
     setGeoError(null);
+    setHideDemo(true);
   };
 
-  const hasFilters = Boolean(selectedCategory || selectedOrg || nearbyEnabled);
+  const visibleOpportunities = (hideDemo
+    ? opportunities.filter((o) => !isSeedOpportunity(o))
+    : opportunities
+  ).filter(isUpcomingOpportunity);
+
+  const hasFilters = Boolean(
+    selectedCategory || selectedOrg || nearbyEnabled || hideDemo
+  );
 
   const stats = {
-    total: opportunities.length,
-    hackathons: opportunities.filter((o) => o.category === "Hackathon").length,
-    workshops: opportunities.filter((o) => o.category === "Workshop").length,
+    total: visibleOpportunities.length,
+    hackathons: visibleOpportunities.filter((o) => o.category === "Hackathon").length,
+    workshops: visibleOpportunities.filter((o) => o.category === "Workshop").length,
+    live: opportunities.filter((o) => !isSeedOpportunity(o)).length,
   };
 
   return (
@@ -455,9 +504,9 @@ export default function HomePage() {
       <div className="bg-white border-b-4 border-black px-4 py-2 flex items-center justify-between font-mono-label text-xs">
         <span>HACKFINDER v1.0</span>
         <span className="bg-[#1a1a4e] text-white px-3 py-1">
-          {opportunities.some((o) => !isSeedOpportunity(o))
-            ? "<live> scraped feed </live>"
-            : "<demo> seed data — pipeline not promoted yet </demo>"}
+          {stats.live > 0
+            ? `<live> ${stats.live} scraped cards </live>`
+            : "<demo> no live cards yet — run pipeline </demo>"}
         </span>
       </div>
 
@@ -527,7 +576,7 @@ export default function HomePage() {
             onCategoryChange={setSelectedCategory}
             onOrgChange={setSelectedOrg}
             onReset={handleReset}
-            count={opportunities.length}
+            count={visibleOpportunities.length}
             nearbyEnabled={nearbyEnabled}
             radiusKm={radiusKm}
             geoError={geoError}
@@ -537,13 +586,21 @@ export default function HomePage() {
             }}
             onRadiusChange={setRadiusKm}
             onLocate={locate}
+            hideDemo={hideDemo}
+            onHideDemoToggle={setHideDemo}
           />
 
           <div className="retro-window mt-6 overflow-hidden">
             <div className="retro-titlebar px-4 py-2 font-mono-label text-xs">SOURCES</div>
             <div className="p-4 flex flex-wrap gap-2 bg-[#fdf8e1]">
-              {["GDG Cloud", "Google Devs", "AWS NUST", "Imagine Art", "Change Mech"].map(
-                (src) => (
+              {[
+                "GDG Cloud",
+                "Google Devs",
+                "AWS NUST",
+                "Imagine Art",
+                "Change Mech",
+                "LabLab.ai",
+              ].map((src) => (
                   <span
                     key={src}
                     className="neo-border-2 bg-white text-[10px] font-bold px-2 py-1 uppercase font-mono-label"
@@ -605,17 +662,17 @@ export default function HomePage() {
             <ErrorBanner message={error} />
           ) : loading ? (
             <LoadingGrid />
-          ) : opportunities.length === 0 ? (
+          ) : visibleOpportunities.length === 0 ? (
             <EmptyState hasFilters={hasFilters} onReset={handleReset} />
           ) : (
             <div className="flex flex-col gap-6">
               <EventsMap
-                opportunities={opportunities}
+                opportunities={visibleOpportunities}
                 center={nearbyEnabled ? userLocation : null}
                 radiusKm={radiusKm}
               />
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
-                {opportunities.map((opp) => (
+                {visibleOpportunities.map((opp) => (
                   <OpportunityCard key={opp.id} opp={opp} />
                 ))}
               </div>

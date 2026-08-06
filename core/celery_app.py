@@ -32,6 +32,8 @@ celery_app.conf.update(
         "tasks.workflows.dedup_task": {"queue": "deliveries"},
         "tasks.workflows.feed_ingest_task": {"queue": "scrapers"},
         "tasks.workflows.process_pending_staged": {"queue": "ai_extraction"},
+        "tasks.workflows.backfill_geo_task": {"queue": "deliveries"},
+        "tasks.workflows.backfill_links_task": {"queue": "deliveries"},
     },
     
     # DISTRIBUTED RATE LIMITING

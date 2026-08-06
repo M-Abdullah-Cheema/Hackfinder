@@ -108,6 +108,14 @@ async def get_opportunities(
         le=2000.0,
         description="Search radius in km when lat/lng provided",
     ),
+    upcoming_only: bool = Query(
+        default=True,
+        description="If true (default), hide events whose start/end are already in the past",
+    ),
+    include_undated: bool = Query(
+        default=True,
+        description="When upcoming_only, keep rows that have no start/end datetime",
+    ),
     limit: int = Query(default=100, ge=1, le=500, description="Max records to return"),
     offset: int = Query(default=0, ge=0, description="Pagination offset"),
     db: AsyncSession = Depends(get_db),
@@ -115,7 +123,10 @@ async def get_opportunities(
     """
     Return deduplicated opportunities with optional category/org/geo filters.
     When lat+lng are provided, prefers PostGIS ST_DWithin, else bbox + Haversine.
+    By default only upcoming/ongoing events are returned.
     """
+    from core.event_time import row_is_upcoming
+
     query = select(FinalOpportunity)
 
     if category:
@@ -199,6 +210,13 @@ async def get_opportunities(
             status_code=503,
             detail="Database unreachable. Switch to phone hotspot and retry.",
         ) from exc
+
+    if upcoming_only:
+        rows = [
+            r
+            for r in rows
+            if row_is_upcoming(r, include_undated=include_undated)
+        ]
 
     if lat is not None and lng is not None and not used_postgis:
         rows = [

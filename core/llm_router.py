@@ -9,16 +9,26 @@ from core.ai_schemas import ExtractedOpportunity
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "You are a precise global events extraction assistant. "
-    "Analyze social posts, OCR flyer text, or calendar copy and extract structured "
-    "opportunity fields. Prefer real city/country and UTC datetimes when stated. "
-    "Fill taxonomy as Domain -> subcategory -> format "
-    "(domain: Tech/Recreational/Community/Cultural/Other; "
-    "subcategory: short label like AI/ML, Cloud, Music, Sports; "
-    "format: In-Person/Virtual/Hybrid). "
-    "Convert local times to UTC when timezone is clear; "
-    "otherwise leave start/end null rather than guessing coordinates. "
-    "If a detail is missing, leave it null — never invent lat/lng. "
+    "You are a precise global events extraction assistant.\n"
+    "Extract ONE structured opportunity from social posts, OCR flyer text, or calendar copy.\n"
+    "\n"
+    "QUALITY RULES:\n"
+    "- title: short formal event name only (e.g. 'Build with AI 2026'). "
+    "Never copy the full caption, hashtags, emojis, or CTAs like 'Register now'.\n"
+    "- organization_name: the host only (e.g. 'GDG Cloud Islamabad', 'lablab.ai'). "
+    "Never @handles, never multiple rambling lines.\n"
+    "- registration_url: copy any real apply/register link from the text "
+    "(bit.ly, lu.ma, forms.gle, eventbrite, google forms, linktr.ee). "
+    "Never invent URLs. Leave null only when no link exists.\n"
+    "- Prefer the flyer/OCR headline over caption fluff when both exist.\n"
+    "- city/country: real place names when stated (venue city). "
+    "For virtual-only events with no city, leave city null and set is_remote=true.\n"
+    "- latitude/longitude: ALWAYS null (a separate geocoder fills map pins).\n"
+    "- Dates: convert to UTC when timezone is clear; else leave start/end null "
+    "(do not invent dates).\n"
+    "- Taxonomy: domain Tech/Recreational/Community/Cultural/Other; "
+    "subcategory short (AI/ML, Cloud, Startup…); format In-Person/Virtual/Hybrid.\n"
+    "- If a field is unknown, use null — never invent URLs, cities, or orgs.\n"
     "Respond with a single JSON object only (no markdown)."
 )
 
@@ -48,14 +58,19 @@ class AIRouter:
                 api_key=api_key,
                 base_url="https://api.groq.com/openai/v1",
             )
-            # Fast + generous free daily limit; override with GROQ_MODEL if needed
-            self.model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+            # Stronger default for cleaner titles; override with GROQ_MODEL if rate-limited
+            self.model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
     async def extract_structured_data(self, sanitized_text: str) -> ExtractedOpportunity | None:
+        # Cap payload — noisy Instagram captions + OCR can blow context / confuse small models
+        text = (sanitized_text or "").strip()
+        if len(text) > 6000:
+            text = text[:6000] + "\n…[truncated]"
+
         try:
             if self.provider == "gemini":
-                return await self._extract_gemini(sanitized_text)
-            return await self._extract_groq(sanitized_text)
+                return await self._extract_gemini(text)
+            return await self._extract_groq(text)
         except ValidationError as e:
             logger.error("LLM response failed schema validation: %s", e)
             return None
@@ -76,9 +91,9 @@ class AIRouter:
                 {
                     "role": "user",
                     "content": (
-                        "Extract the opportunity data from this text into JSON matching "
-                        "this JSON Schema:\n"
-                        f"{json.dumps(schema)}\n\n"
+                        "Extract ONE opportunity as JSON matching this schema.\n"
+                        "Remember: short title, host org only, lat/lng must be null.\n"
+                        f"Schema:\n{json.dumps(schema)}\n\n"
                         f"Text:\n{sanitized_text}"
                     ),
                 },
@@ -93,7 +108,11 @@ class AIRouter:
         logger.info("Sending payload to Gemini (%s) for structured extraction...", self.model)
         response = await self.gemini_client.aio.models.generate_content(
             model=self.model,
-            contents=f"Extract the opportunity data from this text:\n\n{sanitized_text}",
+            contents=(
+                "Extract ONE opportunity as JSON. "
+                "Short title, host org only, lat/lng null.\n\n"
+                f"{sanitized_text}"
+            ),
             config=types.GenerateContentConfig(
                 system_instruction=self.system_prompt,
                 response_mime_type="application/json",

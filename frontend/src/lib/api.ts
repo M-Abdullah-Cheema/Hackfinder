@@ -40,6 +40,7 @@ export async function fetchOpportunities(params: {
   if (params.lng != null) url.searchParams.set("lng", String(params.lng));
   if (params.radius_km != null)
     url.searchParams.set("radius_km", String(params.radius_km));
+  url.searchParams.set("upcoming_only", "true");
   url.searchParams.set("limit", "200");
 
   const res = await timedFetch(url.toString());

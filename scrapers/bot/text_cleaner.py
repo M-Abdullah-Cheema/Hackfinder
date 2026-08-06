@@ -1,9 +1,10 @@
 import re
 import urllib.request
 
+
 class SocialMediaSanitizer:
     """
-    Cleans conversational and social media text structures by removing 
+    Cleans conversational and social media text structures by removing
     excessive hashtag noise, managing emojis, and resolving short links.
     """
 
@@ -12,19 +13,42 @@ class SocialMediaSanitizer:
         if not text:
             return ""
 
-        # 1. Strip trailing or excessive hashtag blocks (e.g., #opportunity #hiring #tech)
-        # Matches # followed by alphanumeric characters, trailing at the end or clustered
-        text = re.sub(r'(#\w+\s*)+$', '', text)
-        # Clean inline hashtags but keep the word (e.g., "This #hiring event" -> "This hiring event")
-        text = re.sub(r'#(\w+)', r'\1', text)
+        # Drop common CTA / engagement spam lines
+        lines = []
+        for line in text.splitlines():
+            low = line.strip().lower()
+            if not low:
+                continue
+            if any(
+                phrase in low
+                for phrase in (
+                    "link in bio",
+                    "follow us",
+                    "like and share",
+                    "double tap",
+                    "tag a friend",
+                    "comment below",
+                    "send this to",
+                )
+            ):
+                continue
+            lines.append(line)
+        text = "\n".join(lines) if lines else text
 
-        # 2. Clean up repetitive, trailing emoji blocks to keep text readable
-        # This reduces long strings of identical icons down to a single instance
-        text = re.sub(r'([\u2600-\u1F9FF])\1+', r'\1', text)
+        # Strip trailing hashtag blocks
+        text = re.sub(r"(#\w+\s*)+$", "", text, flags=re.MULTILINE)
+        # Keep hashtag words without the #
+        text = re.sub(r"#(\w+)", r"\1", text)
+        # Soften @handles to plain names
+        text = re.sub(r"@([\w.]+)", r"\1", text)
 
-        # 3. Collapse multiple spaces or newlines down to clean spacing
-        text = re.sub(r'\s+', ' ', text)
-        
+        # Collapse repetitive emoji runs
+        text = re.sub(r"([\U00002600-\U0001F9FF])\1+", r"\1", text)
+
+        # Collapse whitespace but keep paragraph breaks
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+
         return text.strip()
 
     @staticmethod
@@ -32,13 +56,11 @@ class SocialMediaSanitizer:
         """Resolves tracking shortcodes (like lnkd.in redirects) back to original destinations."""
         if not short_url or ("lnkd.in" not in short_url and "bit.ly" not in short_url):
             return short_url
-            
+
         try:
-            # Send a fast HEAD request to grab the redirect location header without downloading body bytes
             opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler)
             request = urllib.request.Request(short_url, method="HEAD")
             with opener.open(request) as response:
                 return response.geturl()
         except Exception:
-            # Fallback to short URL if resolution fails due to network walls or token timeouts
             return short_url

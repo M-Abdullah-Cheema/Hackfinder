@@ -219,7 +219,10 @@ def scrape_task(self, target_url: str):
                     "locale": "en-US",
                 }
                 proxy_cfg = playwright_proxy()
-                if proxy_cfg and os.getenv("USE_PLAYWRIGHT_PROXY", "0") == "1":
+                # Auto-use proxy when PROXY_SERVER / PROXY_API_KEY is configured,
+                # unless USE_PLAYWRIGHT_PROXY=0 explicitly disables it.
+                use_proxy = os.getenv("USE_PLAYWRIGHT_PROXY", "auto").strip().lower()
+                if proxy_cfg and use_proxy not in {"0", "false", "no", "off"}:
                     ctx_kwargs["proxy"] = proxy_cfg
                     logger.info("[proxy] Playwright context using upstream proxy")
 
@@ -735,6 +738,7 @@ def ai_task(self, opportunity_id: str):
             return None
 
         from core.llm_router import AIRouter
+        from scrapers.bot.text_cleaner import SocialMediaSanitizer
 
         async with AsyncSessionLocal() as session:
             record = await session.get(ScrapedOpportunity, opportunity_id)
@@ -747,12 +751,15 @@ def ai_task(self, opportunity_id: str):
             logger.warning(f"⚠️ No text to process for {opportunity_id}. Skipping AI step.")
             return None
 
+        cleaned = SocialMediaSanitizer.clean_text(raw_text)
         router = AIRouter()
-        extracted = await router.extract_structured_data(raw_text)
+        extracted = await router.extract_structured_data(cleaned or raw_text)
 
         if extracted is None:
             logger.error(f"❌ AI extraction returned None for {opportunity_id}.")
             return None
+
+        from core.link_extractor import resolve_registration_url
 
         def _iso(dt):
             return dt.isoformat() if dt is not None else None
@@ -762,12 +769,18 @@ def ai_task(self, opportunity_id: str):
         if not fmt:
             fmt = "Virtual" if extracted.is_remote else "In-Person"
 
+        reg_url = resolve_registration_url(
+            llm_url=str(extracted.registration_url) if extracted.registration_url else None,
+            text=raw_text,
+            platform_post_id=None,  # filled in dedup with real platform id
+        )
+
         result = {
             "opportunity_id": opportunity_id,
             "title": extracted.title,
             "organization_name": extracted.organization_name,
             "category": extracted.category,
-            "registration_url": str(extracted.registration_url) if extracted.registration_url else None,
+            "registration_url": reg_url,
             "is_remote": extracted.is_remote,
             "city": getattr(extracted, "city", None),
             "country": getattr(extracted, "country", None),
@@ -779,6 +792,7 @@ def ai_task(self, opportunity_id: str):
             "domain": getattr(extracted, "domain", None) or "Tech",
             "subcategory": getattr(extracted, "subcategory", None),
             "format": fmt,
+            "_raw_text": raw_text,
         }
         logger.info(
             f"🧠 AI extracted: [{extracted.category}] {extracted.title} "
@@ -807,12 +821,14 @@ def dedup_task(self, ai_result):
 
         from core.dedup_engine import DeduplicationEngine
         from core.embedding_client import EmbeddingEngine
+        from core.event_time import is_upcoming_opportunity
+        from core.geocoder import enrich_coords
+        from core.link_extractor import resolve_registration_url
 
         opportunity_id = ai_result.get("opportunity_id")
         title = ai_result.get("title", "Untitled")
         org = ai_result.get("organization_name", "Unknown")
         category = ai_result.get("category", "Other")
-        reg_url = ai_result.get("registration_url")
 
         def _parse_optional_dt(value):
             if not value:
@@ -825,10 +841,44 @@ def dedup_task(self, ai_result):
             except ValueError:
                 return None
 
-        # Retrieve the platform_post_id from the staging table
+        # Retrieve the platform_post_id + caption from the staging table
         async with AsyncSessionLocal() as session:
             record = await session.get(ScrapedOpportunity, opportunity_id)
             platform_post_id = record.platform_post_id if record else opportunity_id
+            staged_text = (record.extracted_text if record else None) or ai_result.get(
+                "_raw_text"
+            )
+
+        start_dt = _parse_optional_dt(ai_result.get("start_datetime_utc"))
+        end_dt = _parse_optional_dt(ai_result.get("end_datetime_utc"))
+
+        if not is_upcoming_opportunity(
+            start_datetime_utc=start_dt,
+            end_datetime_utc=end_dt,
+            include_undated=True,
+        ):
+            logger.info(
+                "Skipping past event '%s' (start=%s end=%s)",
+                title,
+                start_dt,
+                end_dt,
+            )
+            return "PAST"
+
+        reg_url = resolve_registration_url(
+            llm_url=ai_result.get("registration_url"),
+            text=staged_text,
+            platform_post_id=platform_post_id,
+        )
+
+        geo = enrich_coords(
+            city=ai_result.get("city"),
+            country=ai_result.get("country"),
+            latitude=ai_result.get("latitude"),
+            longitude=ai_result.get("longitude"),
+            is_remote=bool(ai_result.get("is_remote"))
+            or (ai_result.get("format") or "").lower() == "virtual",
+        )
 
         record_data = {
             "title": title,
@@ -836,12 +886,12 @@ def dedup_task(self, ai_result):
             "category": category,
             "registration_url": reg_url,
             "platform_post_id": platform_post_id,
-            "city": ai_result.get("city"),
-            "country": ai_result.get("country"),
-            "latitude": ai_result.get("latitude"),
-            "longitude": ai_result.get("longitude"),
-            "start_datetime_utc": _parse_optional_dt(ai_result.get("start_datetime_utc")),
-            "end_datetime_utc": _parse_optional_dt(ai_result.get("end_datetime_utc")),
+            "city": geo.get("city"),
+            "country": geo.get("country"),
+            "latitude": geo.get("latitude"),
+            "longitude": geo.get("longitude"),
+            "start_datetime_utc": start_dt,
+            "end_datetime_utc": end_dt,
             "local_timezone": ai_result.get("local_timezone"),
             "domain": ai_result.get("domain") or "Tech",
             "subcategory": ai_result.get("subcategory"),
@@ -1102,16 +1152,26 @@ def feed_ingest_task(self):
                 elif "job" in title_l or "hiring" in title_l:
                     category = "Job"
 
+                from core.geocoder import enrich_coords
+
+                geo = enrich_coords(
+                    city=event.city,
+                    country=event.country,
+                    latitude=event.latitude,
+                    longitude=event.longitude,
+                    is_remote=(event.format or "").lower() == "virtual",
+                )
+
                 record_data = {
                     "title": event.title,
                     "organization_name": event.organization_name or event.source_name,
                     "category": category,
                     "registration_url": event.registration_url,
                     "platform_post_id": event.platform_post_id,
-                    "city": event.city,
-                    "country": event.country,
-                    "latitude": event.latitude,
-                    "longitude": event.longitude,
+                    "city": geo.get("city"),
+                    "country": geo.get("country"),
+                    "latitude": geo.get("latitude"),
+                    "longitude": geo.get("longitude"),
                     "start_datetime_utc": event.start_datetime_utc,
                     "end_datetime_utc": event.end_datetime_utc,
                     "local_timezone": event.local_timezone,
@@ -1165,6 +1225,121 @@ def feed_ingest_task(self):
             "feeds": len(feeds),
         }
         logger.info("feed_ingest_task complete: %s", summary)
+        return summary
+
+    return _run_async(_execute())
+
+
+@shared_task(name="tasks.workflows.backfill_geo_task")
+def backfill_geo_task():
+    """Geocode final_opportunities missing lat/lng (city alias + Nominatim)."""
+    async def _execute():
+        import re as _re
+
+        from sqlalchemy import select, text
+
+        from core.geocoder import CITY_ALIASES, enrich_coords
+
+        def _infer_city(*parts: str | None):
+            blob = " ".join(p for p in parts if p).lower()
+            for alias, (_lat, _lng, city, country) in CITY_ALIASES.items():
+                if _re.search(rf"\b{_re.escape(alias)}\b", blob):
+                    return city, country
+            return None, None
+
+        updated = geocoded = 0
+        async with AsyncSessionLocal() as session:
+            rows = (await session.execute(select(FinalOpportunity))).scalars().all()
+            for row in rows:
+                changed = False
+                if not row.domain:
+                    row.domain = "Tech"
+                    changed = True
+                if not row.subcategory:
+                    row.subcategory = row.category or "Other"
+                    changed = True
+                if not row.format:
+                    row.format = "In-Person"
+                    changed = True
+                if not row.city:
+                    city, country = _infer_city(row.title, row.organization_name)
+                    if city:
+                        row.city = city
+                        row.country = row.country or country
+                        if country == "Pakistan":
+                            row.local_timezone = row.local_timezone or "Asia/Karachi"
+                        changed = True
+                if row.city and (row.latitude is None or row.longitude is None):
+                    geo = enrich_coords(
+                        city=row.city,
+                        country=row.country,
+                        latitude=row.latitude,
+                        longitude=row.longitude,
+                    )
+                    if geo.get("latitude") is not None:
+                        row.latitude = geo["latitude"]
+                        row.longitude = geo["longitude"]
+                        row.city = geo.get("city") or row.city
+                        row.country = geo.get("country") or row.country
+                        geocoded += 1
+                        changed = True
+                if changed:
+                    updated += 1
+            await session.commit()
+            await session.execute(
+                text(
+                    """
+                    UPDATE final_opportunities
+                    SET location = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography
+                    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+                    """
+                )
+            )
+            await session.commit()
+
+        summary = {"status": "ok", "updated": updated, "geocoded": geocoded}
+        logger.info("backfill_geo_task complete: %s", summary)
+        return summary
+
+    return _run_async(_execute())
+
+
+@shared_task(name="tasks.workflows.backfill_links_task")
+def backfill_links_task():
+    """Fill missing registration_url from staged captions or Instagram permalink."""
+    async def _execute():
+        from sqlalchemy import select
+
+        from core.link_extractor import is_junk_url, resolve_registration_url
+
+        filled = 0
+        async with AsyncSessionLocal() as session:
+            rows = (await session.execute(select(FinalOpportunity))).scalars().all()
+
+            for row in rows:
+                if row.registration_url and not is_junk_url(row.registration_url):
+                    continue
+                staged = (
+                    await session.execute(
+                        select(ScrapedOpportunity).where(
+                            ScrapedOpportunity.platform_post_id == row.platform_post_id
+                        )
+                    )
+                ).scalars().first()
+                text = staged.extracted_text if staged else None
+                url = resolve_registration_url(
+                    llm_url=None if is_junk_url(row.registration_url) else row.registration_url,
+                    text=text,
+                    platform_post_id=row.platform_post_id,
+                )
+                if url and url != row.registration_url:
+                    row.registration_url = url
+                    filled += 1
+
+            await session.commit()
+
+        summary = {"status": "ok", "filled": filled}
+        logger.info("backfill_links_task complete: %s", summary)
         return summary
 
     return _run_async(_execute())

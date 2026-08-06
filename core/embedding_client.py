@@ -1,4 +1,4 @@
-"""Generate semantic vectors for dedup. Gemini preferred; FastEmbed local fallback."""
+"""Generate semantic vectors for dedup. Gemini preferred when billed; FastEmbed fallback."""
 from __future__ import annotations
 
 import logging
@@ -32,7 +32,6 @@ def _local_semantic_embedding(text: str) -> list[float]:
     from fastembed import TextEmbedding
 
     if _fastembed_model is None:
-        # Small, CPU-friendly model; downloads once on first use
         _fastembed_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
         logger.info("Loaded FastEmbed model BAAI/bge-small-en-v1.5")
 
@@ -42,21 +41,49 @@ def _local_semantic_embedding(text: str) -> list[float]:
     return _pad_or_trim([float(x) for x in vectors[0]])
 
 
+def _gemini_key_usable(api_key: str) -> bool:
+    """
+    Gemini embedding API needs a Google AI Studio / Vertex key.
+    Keys starting with 'AQ.' are typically other Google product tokens and fail embeddings.
+    """
+    if not api_key or api_key.startswith("your_"):
+        return False
+    if api_key.startswith("AQ."):
+        logger.warning(
+            "GEMINI_API_KEY looks like an AI Studio browser token (AQ.…). "
+            "For Gemini embeddings, create an API key at https://aistudio.google.com/apikey "
+            "(enable billing) and set EMBEDDING_PROVIDER=gemini."
+        )
+        return False
+    return True
+
+
 class EmbeddingEngine:
-    """Generates 1536-dimensional vectors (Gemini preferred, FastEmbed fallback)."""
+    """Generates 1536-dimensional vectors (Gemini when configured, else FastEmbed)."""
 
     def __init__(self):
         self.model = "gemini-embedding-001"
         self._client = None
+        provider = (os.getenv("EMBEDDING_PROVIDER") or "auto").strip().lower()
         api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-        if api_key and not api_key.startswith("your_") and not api_key.startswith("AQ."):
-            # AQ. keys are often AI Studio keys that fail for embeddings
+
+        want_gemini = provider in {"gemini", "auto"}
+        force_local = provider in {"fastembed", "local"}
+
+        if force_local:
+            logger.info("EMBEDDING_PROVIDER=%s — using FastEmbed only", provider)
+        elif want_gemini and _gemini_key_usable(api_key):
             try:
                 from google import genai
 
                 self._client = genai.Client(api_key=api_key)
+                logger.info("Gemini embeddings enabled (%s)", self.model)
             except Exception as exc:
                 logger.warning("Gemini embedding client unavailable: %s", exc)
+        elif provider == "gemini":
+            logger.warning(
+                "EMBEDDING_PROVIDER=gemini but no usable GEMINI_API_KEY — falling back to FastEmbed"
+            )
 
     async def generate_vector(
         self, title: str, org_name: str, category: str

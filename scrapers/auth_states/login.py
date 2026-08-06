@@ -1,13 +1,19 @@
 """
-One-time Playwright login / checkpoint helper.
+Playwright Instagram login / OTP / human-check helper.
 
-Opens a visible Chrome window with your existing Instagram session (if any).
-Complete login or the "Confirm you're human" challenge, then press Enter
-so the fresh session is saved to state.json.
+Opens a visible browser with your existing session (if any). Complete:
+  - password login
+  - Gmail/email security code (OTP)
+  - "Confirm you're human" checkpoint
+
+Session is saved only when Instagram no longer looks blocked
+(unless you type force).
 
 Usage:
     python scrapers/auth_states/login.py
 """
+from __future__ import annotations
+
 import asyncio
 import os
 from playwright.async_api import async_playwright
@@ -15,7 +21,25 @@ from playwright.async_api import async_playwright
 STATE_PATH = os.path.join(os.path.dirname(__file__), "state.json")
 
 
-async def main():
+def _blocked(url: str, body: str) -> bool:
+    u = (url or "").lower()
+    b = (body or "").lower()
+    needles = (
+        "accounts/login",
+        "accounts/suspended",
+        "/challenge",
+        "confirm you're human",
+        "confirm you’re human",
+        "enter the code",
+        "security code",
+        "we sent a code",
+        "check your email",
+        "suspicious login",
+    )
+    return any(n in u or n in b for n in needles)
+
+
+async def main() -> int:
     os.environ.setdefault(
         "PLAYWRIGHT_BROWSERS_PATH",
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright"),
@@ -24,8 +48,9 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         ctx_kwargs = {
-            "viewport": {"width": 1280, "height": 800},
+            "viewport": {"width": 1280, "height": 900},
             "locale": "en-US",
+            "timezone_id": "Asia/Karachi",
             "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -44,41 +69,40 @@ async def main():
         await page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
 
         print(
-            "\nIn the browser window:\n"
-            "  1) If you see 'Confirm you're human' — click Continue and finish it.\n"
-            "  2) If you see a login form — log in normally.\n"
-            "  3) When you can see the Instagram home feed OR a profile grid with posts,\n"
-            "     come back here and press Enter.\n"
+            "\nIn the browser, finish EVERY step Instagram shows:\n"
+            "  1) Username / password\n"
+            "  2) Gmail / email OTP (security code)\n"
+            "  3) Confirm you're human → Continue\n"
+            "  4) Wait until the normal HOME FEED is visible\n\n"
+            "Then come back here:\n"
+            "  - Press Enter to save (only if feed looks good)\n"
+            "  - Or type force then Enter to save anyway\n"
         )
-        input(">>> Press Enter when Instagram is usable: ")
+        answer = input(">>> Press Enter when ready (or 'force'): ").strip().lower()
 
         final_url = page.url or ""
-        body = ""
         try:
             body = await page.evaluate(
-                "() => (document.body && document.body.innerText || '').slice(0, 500)"
+                "() => (document.body && document.body.innerText || '').slice(0, 800)"
             )
         except Exception:
-            pass
+            body = ""
 
-        if (
-            "accounts/suspended" in final_url
-            or "accounts/login" in final_url
-            or "confirm you're human" in body.lower()
-            or "confirm you’re human" in body.lower()
-        ):
+        if answer != "force" and _blocked(final_url, body or ""):
             print(
-                "\n[WARN] Still looks blocked/logged-out.\n"
+                "\n[FAIL] Still on login / OTP / human-check / suspended.\n"
                 f"  url={final_url}\n"
-                "  Finish the checkpoint fully, then run this script again.\n"
+                "  Session was NOT overwritten. Finish the challenge and run again.\n"
             )
-        else:
-            print(f"\n[ok] Current URL looks usable: {final_url}")
+            await browser.close()
+            return 1
 
         await context.storage_state(path=STATE_PATH)
         await browser.close()
+        print(f"\n[ok] Current URL: {final_url}")
         print(f"[OK] Session saved to: {STATE_PATH}")
+        return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))
