@@ -31,12 +31,14 @@ celery_app.conf.update(
         "tasks.workflows.ai_task": {"queue": "ai_extraction"},
         "tasks.workflows.dedup_task": {"queue": "deliveries"},
         "tasks.workflows.feed_ingest_task": {"queue": "scrapers"},
+        "tasks.workflows.process_pending_staged": {"queue": "ai_extraction"},
     },
     
     # DISTRIBUTED RATE LIMITING
-    # Protects your burner accounts by strictly limiting how fast scraping tasks execute
+    # Protects burner Instagram accounts from burst scrapes / checkpointing
     task_annotations={
-        "tasks.workflows.scrape_task": {"rate_limit": "5/m"}  # Max 5 scrapes per minute
+        "tasks.workflows.scrape_task": {"rate_limit": "3/m"},
+        "tasks.workflows.ai_task": {"rate_limit": "20/m"},
     },
 
     # Celery Beat — automatic background scraping every SCRAPE_INTERVAL_SECONDS (default 6h)

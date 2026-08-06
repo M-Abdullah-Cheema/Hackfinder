@@ -326,10 +326,7 @@ def scrape_task(self, target_url: str):
                         current_url,
                         body_snip[:180],
                     )
-                    try:
-                        await context.storage_state(path=state_path)
-                    except Exception:
-                        pass
+                    # Do NOT overwrite a previously-good state.json with a checkpoint page
                     await browser.close()
                     return None
 
@@ -493,6 +490,7 @@ def scrape_task(self, target_url: str):
             return None
 
         # ── 2. Ensure Source row + persist ScrapedOpportunity ──────────────
+        queued_ids: list[str] = []
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(Source).where(
@@ -515,8 +513,6 @@ def scrape_task(self, target_url: str):
                 await session.refresh(source)
             source_id = source.id
 
-            first_saved_id = None
-
             for post in posts:
                 existing = await session.execute(
                     select(ScrapedOpportunity).where(
@@ -524,21 +520,25 @@ def scrape_task(self, target_url: str):
                         == post["platform_post_id"]
                     )
                 )
-                if existing.scalars().first():
-                    logger.info(
-                        "[skip] Already staged: %s", post["platform_post_id"]
-                    )
-                    if first_saved_id is None:
-                        # Still return an existing UUID so OCR/AI can run
-                        row = await session.execute(
-                            select(ScrapedOpportunity).where(
-                                ScrapedOpportunity.platform_post_id
-                                == post["platform_post_id"]
-                            )
+                existing_row = existing.scalars().first()
+                if existing_row:
+                    final_hit = await session.execute(
+                        select(FinalOpportunity.id).where(
+                            FinalOpportunity.platform_post_id
+                            == post["platform_post_id"]
                         )
-                        existing_row = row.scalars().first()
-                        if existing_row:
-                            first_saved_id = str(existing_row.id)
+                    )
+                    if final_hit.scalars().first():
+                        logger.info(
+                            "[skip] Already in final table: %s",
+                            post["platform_post_id"],
+                        )
+                    else:
+                        queued_ids.append(str(existing_row.id))
+                        logger.info(
+                            "[queue] Re-process staged post: %s",
+                            post["platform_post_id"],
+                        )
                     continue
 
                 record = ScrapedOpportunity(
@@ -550,8 +550,7 @@ def scrape_task(self, target_url: str):
                 session.add(record)
                 try:
                     await session.flush()
-                    if first_saved_id is None:
-                        first_saved_id = str(record.id)
+                    queued_ids.append(str(record.id))
                 except Exception as exc:
                     logger.error(
                         "[db] flush failed for %s: %s",
@@ -563,15 +562,53 @@ def scrape_task(self, target_url: str):
 
             await session.commit()
 
-        logger.info(
-            "[ok] scrape_task complete. Staged %d post(s) from %s. Returning UUID: %s",
-            len(posts),
-            target_url_norm,
-            first_saved_id,
-        )
-        return first_saved_id
+        # Dedupe IDs while preserving order
+        seen_q: set[str] = set()
+        unique_ids: list[str] = []
+        for oid in queued_ids:
+            if oid not in seen_q:
+                seen_q.add(oid)
+                unique_ids.append(oid)
 
-    return _run_async(_execute())
+        logger.info(
+            "[ok] scrape_task complete for %s — %d post(s) ready for OCR/AI fan-out",
+            target_url_norm,
+            len(unique_ids),
+        )
+        return unique_ids
+
+    ids = _run_async(_execute())
+    if not ids:
+        return {"status": "empty", "dispatched": 0}
+    dispatched = _fanout_post_pipelines(ids)
+    return {
+        "status": "ok",
+        "queued": len(ids),
+        "dispatched": dispatched,
+    }
+
+
+def _fanout_post_pipelines(opportunity_ids: list[str]) -> int:
+    """Enqueue OCR → prefilter → AI → dedup for every staged opportunity."""
+    from celery import chain, group
+
+    jobs = []
+    for oid in opportunity_ids:
+        if not oid:
+            continue
+        jobs.append(
+            chain(
+                ocr_task.s(oid),
+                prefilter_task.s(),
+                ai_task.s(),
+                dedup_task.s(),
+            )
+        )
+    if not jobs:
+        return 0
+    group(jobs).apply_async()
+    logger.info("[fanout] Dispatched %d post pipeline(s)", len(jobs))
+    return len(jobs)
 
 
 # ==========================================
@@ -865,25 +902,45 @@ def dedup_task(self, ai_result):
 # TASK 0: Scheduler — dispatch all Instagram pipelines
 # ==========================================
 def _dispatch_pipeline(target_url: str):
-    """Build and enqueue the scrape → OCR → prefilter → AI → dedup chain."""
-    from celery import chain
+    """
+    Enqueue scrape only. scrape_task fans out OCR→prefilter→AI→dedup
+    for every staged post (not just the first one).
+    """
+    return scrape_task.delay(target_url)
 
-    return chain(
-        scrape_task.s(target_url),
-        ocr_task.s(),
-        prefilter_task.s(),
-        ai_task.s(),
-        dedup_task.s(),
-    ).delay()
+
+@shared_task(name="tasks.workflows.process_pending_staged")
+def process_pending_staged(limit: int = 40):
+    """
+    Re-queue staged ScrapedOpportunity rows that never made it into final_opportunities.
+    Useful after auth recovery or embedding/AI outages — no Instagram re-scrape needed.
+    """
+    async def _collect() -> list[str]:
+        async with AsyncSessionLocal() as session:
+            final_ids = select(FinalOpportunity.platform_post_id)
+            result = await session.execute(
+                select(ScrapedOpportunity.id)
+                .where(~ScrapedOpportunity.platform_post_id.in_(final_ids))
+                .order_by(ScrapedOpportunity.scraped_at.desc())
+                .limit(limit)
+            )
+            return [str(row[0]) for row in result.all()]
+
+    ids = _run_async(_collect())
+    if not ids:
+        logger.info("[pending] No staged posts awaiting promotion")
+        return {"status": "empty", "dispatched": 0}
+    dispatched = _fanout_post_pipelines(ids)
+    return {"status": "ok", "queued": len(ids), "dispatched": dispatched}
 
 
 @shared_task(name="tasks.workflows.trigger_all_sources")
 def trigger_all_sources():
     """
-    Dispatches Instagram scrape chains and optional calendar/API feed ingest.
-
-    Called manually via scripts/trigger_pipeline.py or automatically by Celery Beat.
+    Dispatches Instagram scrapes (each fans out post pipelines) and optional feeds.
     """
+    import time
+
     from core.pipeline_config import (
         AUTH_STATE_PATH,
         INSTAGRAM_TARGETS,
@@ -901,24 +958,34 @@ def trigger_all_sources():
         )
         status = "auth_missing"
     else:
-        for url in INSTAGRAM_TARGETS:
+        for i, url in enumerate(INSTAGRAM_TARGETS):
+            # Stagger starts so Instagram is less likely to checkpoint the session
+            if i > 0:
+                time.sleep(8)
             result = _dispatch_pipeline(url)
-            chains.append({"url": url, "chain_id": result.id})
-            logger.info("Pipeline dispatched for %s (chain_id=%s)", url, result.id)
+            chains.append({"url": url, "task_id": result.id})
+            logger.info("Scrape dispatched for %s (task_id=%s)", url, result.id)
 
     feed_job = None
+    pending_job = None
     if configured_feed_count() > 0:
         feed_job = feed_ingest_task.delay()
         logger.info("Feed ingest dispatched (task_id=%s)", feed_job.id)
     else:
         logger.info("No calendar/API feeds configured — skipping feed_ingest_task")
 
-    logger.info("trigger_all_sources complete — %d Instagram pipeline(s) queued", len(chains))
+    # Also drain any previously staged posts stuck before final insert
+    pending_job = process_pending_staged.delay(50)
+
+    logger.info(
+        "trigger_all_sources complete — %d Instagram scrape(s) queued", len(chains)
+    )
     return {
         "status": status,
         "dispatched": len(chains),
         "chains": chains,
         "feed_task_id": getattr(feed_job, "id", None),
+        "pending_task_id": getattr(pending_job, "id", None),
     }
 
 

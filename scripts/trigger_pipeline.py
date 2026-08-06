@@ -1,14 +1,14 @@
 """
-Trigger the full 4-stage Celery pipeline for every Instagram target.
+Trigger Instagram scrapes (each fans out OCR→AI→dedup for every staged post).
 
 Usage:
     python scripts/trigger_pipeline.py
 
 Prerequisites:
-    1. Redis running: docker run -p 6379:6379 redis
-    2. Celery worker listening on all queues:
-         python -m celery -A core.celery_app worker -Q scrapers,ocr_tasks,ai_extraction,deliveries --loglevel=info --concurrency=2
-    3. Instagram session saved: python scrapers/auth_states/login.py
+    1. Redis running
+    2. Celery worker:
+         python -m celery -A core.celery_app.celery_app worker -Q scrapers,ocr_tasks,ai_extraction,deliveries -l info -P solo
+    3. Instagram session: python scrapers/auth_states/login.py
 """
 
 import sys
@@ -29,23 +29,27 @@ def main() -> int:
         print("       Run this first:  python scrapers/auth_states/login.py")
         return 1
 
-    print(f"[*] Auth OK — dispatching {len(INSTAGRAM_TARGETS)} target(s)...\n")
+    print(f"[*] Auth OK — dispatching {len(INSTAGRAM_TARGETS)} target(s)...")
+    print("    (targets are staggered ~8s apart to reduce Instagram checkpoints)\n")
 
-    # Run synchronously in-process for immediate feedback (still async via Celery)
     result = trigger_all_sources.delay()
-    payload = result.get(timeout=30)
+    payload = result.get(timeout=180)
 
     if payload.get("status") == "auth_missing":
         print("[FAIL] Worker reported missing Instagram auth.")
         return 1
 
-    print(f"[OK] Dispatched {payload.get('dispatched', 0)} pipeline chain(s):\n")
-    for chain in payload.get("chains", []):
-        print(f"  - {chain['url']}")
-        print(f"    chain_id: {chain['chain_id']}\n")
+    print(f"[OK] Dispatched {payload.get('dispatched', 0)} scrape task(s):\n")
+    for item in payload.get("chains", []):
+        print(f"  - {item['url']}")
+        print(f"    task_id: {item.get('task_id') or item.get('chain_id')}\n")
+
+    if payload.get("pending_task_id"):
+        print(f"[*] Also queued pending staged promotion: {payload['pending_task_id']}")
 
     print("[*] Monitor worker logs or run:")
     print("    python scripts/check_live_pipeline.py")
+    print("    python scripts/process_staged.py")
     return 0
 
 
