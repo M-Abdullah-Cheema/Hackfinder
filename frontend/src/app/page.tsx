@@ -502,7 +502,7 @@ export default function HomePage() {
     <div className="min-h-screen flex flex-col">
       {/* Top status bar — Sui Overflow inspired */}
       <div className="bg-white border-b-4 border-black px-4 py-2 flex items-center justify-between font-mono-label text-xs">
-        <span>HACKFINDER v1.0</span>
+        <span>QUESTHUB v1.0</span>
         <span className="bg-[#1a1a4e] text-white px-3 py-1">
           {stats.live > 0
             ? `<live> ${stats.live} scraped cards </live>`
@@ -518,12 +518,12 @@ export default function HomePage() {
               This is
             </p>
             <h1 className="font-display text-5xl sm:text-6xl lg:text-7xl uppercase leading-[0.9] tracking-tight">
-              <span className="text-black">Hack</span>
-              <span className="text-[#1a1a4e]">Finder</span>
+              <span className="text-black">Quest</span>
+              <span className="text-[#1a1a4e]">Hub</span>
             </h1>
             <p className="font-bold text-sm mt-4 max-w-lg text-gray-700">
-              AI-aggregated hackathons, workshops & internships from Islamabad&apos;s
-              top tech communities — scraped, deduplicated, delivered.
+              Live hackathons, workshops &amp; tech quests — scraped from Instagram,
+              cleaned by AI, and filtered to what&apos;s still upcoming.
             </p>
           </div>
 

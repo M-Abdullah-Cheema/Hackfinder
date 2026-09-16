@@ -1,8 +1,17 @@
 import { Opportunity } from "@/types/opportunity";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8002";
+/**
+ * Always call same-origin Next.js routes.
+ * On Vercel these read Supabase directly — works even when your PC is offline.
+ * Local FastAPI (:8002) is optional (scraping only).
+ */
+function apiBase(): string {
+  if (typeof window !== "undefined") return "";
+  // SSR / server components
+  return process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "http://127.0.0.1:3000";
+}
 
-async function timedFetch(url: string, timeoutMs = 8000): Promise<Response> {
+async function timedFetch(url: string, timeoutMs = 12000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -28,7 +37,7 @@ export async function fetchOpportunities(params: {
   lng?: number;
   radius_km?: number;
 }): Promise<Opportunity[]> {
-  const url = new URL(`${API_BASE}/api/opportunities`);
+  const url = new URL(`${apiBase()}/api/opportunities`);
   if (params.category) url.searchParams.set("category", params.category);
   if (params.organization_name)
     url.searchParams.set("organization_name", params.organization_name);
@@ -45,8 +54,16 @@ export async function fetchOpportunities(params: {
 
   const res = await timedFetch(url.toString());
   if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = body?.detail || "";
+    } catch {
+      /* ignore */
+    }
     throw new Error(
-      `API error ${res.status} — database may be unreachable on this network`
+      detail ||
+        `API error ${res.status} — check Supabase env vars on Vercel / .env.local`
     );
   }
   return res.json();
@@ -54,7 +71,7 @@ export async function fetchOpportunities(params: {
 
 export async function fetchCategories(): Promise<string[]> {
   try {
-    const res = await timedFetch(`${API_BASE}/api/opportunities/categories`);
+    const res = await timedFetch(`${apiBase()}/api/opportunities/categories`);
     if (!res.ok) return [];
     return res.json();
   } catch {
@@ -64,7 +81,7 @@ export async function fetchCategories(): Promise<string[]> {
 
 export async function fetchOrganizations(): Promise<string[]> {
   try {
-    const res = await timedFetch(`${API_BASE}/api/opportunities/organizations`);
+    const res = await timedFetch(`${apiBase()}/api/opportunities/organizations`);
     if (!res.ok) return [];
     return res.json();
   } catch {

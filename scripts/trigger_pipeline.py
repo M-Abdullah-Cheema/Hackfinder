@@ -22,7 +22,7 @@ from tasks.workflows import trigger_all_sources
 
 
 def main() -> int:
-    print("[*] HackFinder live pipeline trigger\n")
+    print("[*] QuestHub live pipeline trigger\n")
 
     if not instagram_auth_ready():
         print(f"[FAIL] Instagram auth not found at: {AUTH_STATE_PATH}")

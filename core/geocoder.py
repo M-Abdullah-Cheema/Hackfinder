@@ -130,7 +130,7 @@ def _nominatim_lookup(city: str, country: str | None) -> Optional[dict]:
     # Respect Nominatim usage policy: identify app + 1 req/sec
     user_agent = os.getenv(
         "NOMINATIM_USER_AGENT",
-        "HackFinder/1.0 (hackathon aggregator; local-dev)",
+        "QuestHub/1.0 (hackathon aggregator; local-dev)",
     )
     params = urllib.parse.urlencode(
         {"q": query, "format": "json", "limit": 1, "addressdetails": 1}

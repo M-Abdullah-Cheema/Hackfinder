@@ -13,8 +13,8 @@ INSTAGRAM_TARGETS: list[str] = [
     "https://www.instagram.com/lablab.ai/?hl=en",
 ]
 
-# How often Celery Beat re-triggers the full pipeline (default: 6 hours)
-SCRAPE_INTERVAL_SECONDS: int = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "21600"))
+# How often Celery Beat re-triggers the full pipeline (default: 10 hours)
+SCRAPE_INTERVAL_SECONDS: int = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "36000"))
 
 AUTH_STATE_PATH: str = os.path.join("scrapers", "auth_states", "state.json")
 

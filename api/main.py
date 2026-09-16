@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -27,17 +28,26 @@ from core.models import FinalOpportunity
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Hackathon Aggregator – Public API",
-    description="Serves deduplicated, AI-structured opportunities to the Next.js frontend.",
-    version="1.1.0",
+    title="QuestHub Public API",
+    description="Serves deduplicated, AI-structured opportunities to the QuestHub frontend.",
+    version="1.2.0",
 )
+
+
+def _cors_origins() -> list[str]:
+    defaults = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+    extra = os.getenv("CORS_ORIGINS", "").strip()
+    if not extra:
+        return defaults
+    return defaults + [o.strip() for o in extra.split(",") if o.strip()]
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,7 +93,7 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Hackathon Aggregator API is running."}
+    return {"status": "ok", "message": "QuestHub API is running."}
 
 
 @app.get("/api/opportunities", response_model=list[OpportunityOut])

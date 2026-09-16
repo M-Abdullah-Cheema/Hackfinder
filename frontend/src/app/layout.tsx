@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "HackFinder — Islamabad Tech Opportunities",
+  title: "QuestHub — Upcoming Tech Opportunities",
   description:
-    "AI-powered aggregator for hackathons, internships, and workshops scraped from top Pakistani tech communities.",
+    "QuestHub aggregates upcoming hackathons, workshops, and tech quests from Instagram — scraped, structured by AI, and ready to apply.",
 };
 
 export default function RootLayout({
