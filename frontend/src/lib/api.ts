@@ -1,29 +1,27 @@
 import { Opportunity } from "@/types/opportunity";
 
-/**
- * Always call same-origin Next.js routes.
- * On Vercel these read Supabase directly — works even when your PC is offline.
- * Local FastAPI (:8002) is optional (scraping only).
- */
-function apiBase(): string {
-  if (typeof window !== "undefined") return "";
-  // SSR / server components
-  return process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "http://127.0.0.1:3000";
-}
-
-async function timedFetch(url: string, timeoutMs = 12000): Promise<Response> {
+/** Same-origin Next.js routes (Supabase-backed on Vercel). */
+async function timedFetch(path: string, timeoutMs = 15000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { cache: "no-store", signal: controller.signal });
+    return await fetch(path, { cache: "no-store", signal: controller.signal });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      throw new Error("API timed out — Supabase/network may be blocked");
+      throw new Error("Request timed out. Please refresh and try again.");
     }
-    throw err;
+    throw new Error("Could not reach QuestHub. Please refresh.");
   } finally {
     clearTimeout(timer);
   }
+}
+
+function buildQuery(params: Record<string, string | number | undefined>): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") qs.set(k, String(v));
+  }
+  return qs.toString();
 }
 
 export async function fetchOpportunities(params: {
@@ -37,22 +35,21 @@ export async function fetchOpportunities(params: {
   lng?: number;
   radius_km?: number;
 }): Promise<Opportunity[]> {
-  const url = new URL(`${apiBase()}/api/opportunities`);
-  if (params.category) url.searchParams.set("category", params.category);
-  if (params.organization_name)
-    url.searchParams.set("organization_name", params.organization_name);
-  if (params.city) url.searchParams.set("city", params.city);
-  if (params.country) url.searchParams.set("country", params.country);
-  if (params.domain) url.searchParams.set("domain", params.domain);
-  if (params.subcategory) url.searchParams.set("subcategory", params.subcategory);
-  if (params.lat != null) url.searchParams.set("lat", String(params.lat));
-  if (params.lng != null) url.searchParams.set("lng", String(params.lng));
-  if (params.radius_km != null)
-    url.searchParams.set("radius_km", String(params.radius_km));
-  url.searchParams.set("upcoming_only", "true");
-  url.searchParams.set("limit", "200");
+  const query = buildQuery({
+    category: params.category,
+    organization_name: params.organization_name,
+    city: params.city,
+    country: params.country,
+    domain: params.domain,
+    subcategory: params.subcategory,
+    lat: params.lat,
+    lng: params.lng,
+    radius_km: params.radius_km,
+    upcoming_only: "true",
+    limit: 200,
+  });
 
-  const res = await timedFetch(url.toString());
+  const res = await timedFetch(`/api/opportunities?${query}`);
   if (!res.ok) {
     let detail = "";
     try {
@@ -61,19 +58,22 @@ export async function fetchOpportunities(params: {
     } catch {
       /* ignore */
     }
-    throw new Error(
-      detail ||
-        `API error ${res.status} — check Supabase env vars on Vercel / .env.local`
-    );
+    throw new Error(detail || "Unable to load opportunities right now.");
   }
-  return res.json();
+
+  const data = await res.json();
+  if (!Array.isArray(data)) {
+    throw new Error("Unexpected response from QuestHub API.");
+  }
+  return data;
 }
 
 export async function fetchCategories(): Promise<string[]> {
   try {
-    const res = await timedFetch(`${apiBase()}/api/opportunities/categories`);
+    const res = await timedFetch("/api/opportunities/categories");
     if (!res.ok) return [];
-    return res.json();
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   } catch {
     return [];
   }
@@ -81,9 +81,10 @@ export async function fetchCategories(): Promise<string[]> {
 
 export async function fetchOrganizations(): Promise<string[]> {
   try {
-    const res = await timedFetch(`${apiBase()}/api/opportunities/organizations`);
+    const res = await timedFetch("/api/opportunities/organizations");
     if (!res.ok) return [];
-    return res.json();
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   } catch {
     return [];
   }

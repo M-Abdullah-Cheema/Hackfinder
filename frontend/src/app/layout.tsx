@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "QuestHub — Upcoming Tech Opportunities",
   description:
-    "QuestHub aggregates upcoming hackathons, workshops, and tech quests from Instagram — scraped, structured by AI, and ready to apply.",
+    "Discover upcoming hackathons, workshops, and tech opportunities curated by QuestHub.",
 };
 
 export default function RootLayout({

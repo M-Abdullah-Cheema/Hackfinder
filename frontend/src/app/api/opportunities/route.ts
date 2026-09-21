@@ -25,6 +25,9 @@ export async function GET(req: NextRequest) {
       limit,
     });
 
+    // Never expose seed/demo rows on the public site
+    rows = rows.filter((r) => !(r.platform_post_id || "").startsWith("ig_seed_"));
+
     if (upcomingOnly) {
       rows = rows.filter((r) => isUpcomingOpportunity(r, includeUndated));
     }
